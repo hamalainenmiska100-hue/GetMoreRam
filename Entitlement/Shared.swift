@@ -4,24 +4,25 @@
 //
 //  Created by s s on 2025/3/15.
 //
+
 import SwiftUI
 import StosSign
 
-class AlertHelper<T> : ObservableObject {
+class AlertHelper<T>: ObservableObject {
     @Published var show = false
-    private var result : T?
-    private var c : CheckedContinuation<Void, Never>? = nil
-    
+    private var result: T?
+    private var c: CheckedContinuation<Void, Never>? = nil
+
     func open() async -> T? {
         await withCheckedContinuation { c in
             self.c = c
-            Task { await MainActor.run {
+            Task { @MainActor in
                 self.show = true
-            }}
+            }
         }
         return self.result
     }
-    
+
     func close(result: T?) {
         if let c {
             self.result = result
@@ -31,19 +32,19 @@ class AlertHelper<T> : ObservableObject {
         DispatchQueue.main.async {
             self.show = false
         }
-
     }
 }
+
 typealias YesNoHelper = AlertHelper<Bool>
 
-class InputHelper : AlertHelper<String> {
+class InputHelper: AlertHelper<String> {
     @Published var initVal = ""
-    
+
     func open(initVal: String) async -> String? {
         self.initVal = initVal
         return await super.open()
     }
-    
+
     override func open() async -> String? {
         self.initVal = ""
         return await super.open()
@@ -53,58 +54,53 @@ class InputHelper : AlertHelper<String> {
 extension String: @retroactive Error {}
 extension String: @retroactive LocalizedError {
     public var errorDescription: String? { return self }
-        
-//    private static var enBundle : Bundle? = {
-//        let language = "en"
-//        let path = Bundle.main.path(forResource:language, ofType: "lproj")
-//        let bundle = Bundle(path: path!)
-//        return bundle
-//    }()
-    
+
     var loc: String {
-//        let message = NSLocalizedString(self, comment: "")
-//        if message != self {
-//            return message
-//        }
-//
-//        if let forcedString = String.enBundle?.localizedString(forKey: self, value: nil, table: nil){
-//            return forcedString
-//        }else {
-            return self
-//        }
+        return self
     }
-    
-    func localizeWithFormat(_ arguments: CVarArg...) -> String{
+
+    func localizeWithFormat(_ arguments: CVarArg...) -> String {
         String.localizedStringWithFormat(self.loc, arguments)
     }
-    
 }
 
-class SharedModel: ObservableObject {
+final class SharedModel: ObservableObject {
     @Published var isLogin = false
+    @Published var account: Account?
+    @Published var team: Team?
+
     @AppStorage("AnisetteServer") var anisetteServerURL = "https://ani.sidestore.io"
+
     var session: AppleAPISession?
-    var account: Account?
-    var team: Team?
-    
+
     init() {
-        syncAnisetteServerURL()
+        applyAnisetteServerURL()
     }
-    
-    func syncAnisetteServerURL() {
-        let trimmedURL = anisetteServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        AnisetteDataHelper.shared.url = trimmedURL.isEmpty ? nil : URL(string: trimmedURL)
+
+    func applyAnisetteServerURL() {
+        let trimmed = anisetteServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        anisetteServerURL = trimmed.isEmpty ? "https://ani.sidestore.io" : trimmed
+        AnisetteDataHelper.shared.url = URL(string: anisetteServerURL)
     }
-    
-    func resetSession() {
-        session = nil
-        account = nil
-        team = nil
-        isLogin = false
+
+    func update(account: Account, session: AppleAPISession, team: Team) {
+        self.account = account
+        self.session = session
+        self.team = team
+        self.isLogin = true
+    }
+
+    func clearLiveAuthState() {
+        self.account = nil
+        self.session = nil
+        self.team = nil
+        self.isLogin = false
     }
 }
 
-class DataManager {
+final class DataManager {
     static let shared = DataManager()
     let model = SharedModel()
+
+    private init() {}
 }
