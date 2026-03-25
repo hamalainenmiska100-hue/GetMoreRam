@@ -28,11 +28,15 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
+      - name: Find .app
+        run: |
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "Entitlement.app" -type d | head -n 1)
+          echo "APP_PATH=$APP_PATH" >> $GITHUB_ENV
+
       - name: Package IPA
         run: |
-          mkdir -p Payload
-          cp -r build/Release-iphoneos/*.app Payload/
-
+          mkdir Payload
+          cp -r "$APP_PATH" Payload/
           zip -r Entitlement.ipa Payload
 
       - name: Upload IPA
