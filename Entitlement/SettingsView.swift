@@ -9,30 +9,29 @@ import SwiftUI
 import StosSign
 
 struct SettingsView: View {
+    @ObservedObject var viewModel: LoginViewModel
+    @EnvironmentObject private var sharedModel: SharedModel
 
-    @State var email = ""
-    @State var teamId = ""
-    @StateObject var viewModel : LoginViewModel
-    @EnvironmentObject private var sharedModel : SharedModel
-    
+    @State private var anisetteServerDraft = ""
     @State private var errorShow = false
     @State private var errorInfo = ""
-    
 
     var body: some View {
         Form {
-
             Section {
                 if sharedModel.isLogin {
                     HStack {
                         Text("Email")
                         Spacer()
-                        Text(email)
+                        Text(sharedModel.account?.appleID ?? Keychain.shared.appleIDEmailAddress ?? "")
+                            .multilineTextAlignment(.trailing)
                     }
+
                     HStack {
                         Text("Team ID")
                         Spacer()
-                        Text(teamId)
+                        Text(sharedModel.team?.identifier ?? "")
+                            .multilineTextAlignment(.trailing)
                     }
                 } else {
                     Button("Sign in") {
@@ -42,30 +41,34 @@ struct SettingsView: View {
             } header: {
                 Text("Account")
             }
-            
+
             Section {
                 HStack {
                     Text("Anisette Server URL")
                     Spacer()
-                    TextField("", text: $sharedModel.anisetteServerURL)
+                    TextField("", text: $anisetteServerDraft)
                         .multilineTextAlignment(.trailing)
-                        .textInputAutocapitalization(.never)
+                        .autocapitalization(.none)
                         .disableAutocorrection(true)
-                        .keyboardType(.URL)
                 }
+
+                Button("Apply Anisette Server") {
+                    Task { await applyAnisetteServerURL() }
+                }
+            } footer: {
+                Text("Apply the server only after you finish editing the URL. This will clear the live session and try a silent reauth with the saved Apple ID.")
             }
-            
+
             Section {
                 Button("Clean Up Keychain") {
                     cleanUp()
                 }
             } footer: {
-                Text("If something went wrong during signing in, please try to clean up the keychain, reopen the app and try again.")
+                Text("If something went wrong during signing in, clean up the keychain, reopen the app and sign in again.")
             }
         }
-        .alert("Error", isPresented: $errorShow){
-            Button("OK".loc, action: {
-            })
+        .alert("Error", isPresented: $errorShow) {
+            Button("OK".loc, action: {})
         } message: {
             Text(errorInfo)
         }
@@ -73,47 +76,53 @@ struct SettingsView: View {
             loginModal
         }
         .onAppear {
-            sharedModel.syncAnisetteServerURL()
-            refreshAccountSummary()
-        }
-        .onChange(of: sharedModel.anisetteServerURL) { _ in
-            sharedModel.syncAnisetteServerURL()
+            anisetteServerDraft = sharedModel.anisetteServerURL
+            sharedModel.applyAnisetteServerURL()
+            viewModel.restoreCredentialsIntoFields()
+
+            Task {
+                await viewModel.bootstrapFromKeychainIfPossible()
+            }
         }
     }
-    
+
     var loginModal: some View {
         NavigationView {
             Form {
                 Section {
                     TextField("", text: $viewModel.appleID)
                         .keyboardType(.emailAddress)
-                        .textInputAutocapitalization(.never)
+                        .autocapitalization(.none)
                         .disableAutocorrection(true)
                         .disabled(viewModel.isLoginInProgress)
                 } header: {
                     Text("Apple ID")
                 }
+
                 Section {
                     SecureField("", text: $viewModel.password)
                         .disabled(viewModel.isLoginInProgress)
                 } header: {
                     Text("Password")
                 }
+
                 if viewModel.needVerificationCode {
                     Section {
                         TextField("", text: $viewModel.verificationCode)
                             .keyboardType(.numberPad)
+                            .disabled(viewModel.isLoginInProgress)
                     } header: {
                         Text("Verification Code")
                     }
                 }
+
                 Section {
                     Button("Continue") {
                         Task { await loginButtonClicked() }
                     }
-                    .disabled(viewModel.isLoginInProgress && !viewModel.needVerificationCode)
+                    .disabled(viewModel.isLoginInProgress)
                 }
-                
+
                 Section {
                     Text(viewModel.logs)
                         .font(.system(.subheadline, design: .monospaced))
@@ -132,52 +141,43 @@ struct SettingsView: View {
             }
         }
         .onAppear {
-            sharedModel.syncAnisetteServerURL()
-            if let email = Keychain.shared.appleIDEmailAddress, let password = Keychain.shared.appleIDPassword {
-                viewModel.appleID = email
-                viewModel.password = password
-            }
+            viewModel.restoreCredentialsIntoFields()
         }
     }
-    
+
     func loginButtonClicked() async {
         do {
             if viewModel.needVerificationCode {
                 viewModel.submitVerficationCode()
                 return
             }
-            
+
             let result = try await viewModel.authenticate()
             if result {
-                guard let account = sharedModel.account, let team = sharedModel.team else {
-                    throw "Login succeeded, but account details were missing. Please reopen the app and try again."
-                }
-                
+                anisetteServerDraft = sharedModel.anisetteServerURL
                 viewModel.loginModalShow = false
-                email = account.appleID
-                teamId = team.identifier
             }
-            
         } catch {
             errorInfo = error.localizedDescription
             errorShow = true
         }
     }
-    
+
+    func applyAnisetteServerURL() async {
+        let trimmed = anisetteServerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            errorInfo = "Anisette Server URL cannot be empty."
+            errorShow = true
+            return
+        }
+
+        sharedModel.anisetteServerURL = trimmed
+        await viewModel.handleAnisetteServerURLChange()
+        anisetteServerDraft = sharedModel.anisetteServerURL
+    }
+
     func cleanUp() {
-        Keychain.shared.adiPb = nil
-        Keychain.shared.identifier = nil
-        Keychain.shared.appleIDPassword = nil
-        Keychain.shared.appleIDEmailAddress = nil
-        sharedModel.resetSession()
-        email = ""
-        teamId = ""
-        viewModel.resetForNewAttempt(clearStoredCredentials: true)
+        viewModel.clearAllAuthData()
+        anisetteServerDraft = sharedModel.anisetteServerURL
     }
-    
-    func refreshAccountSummary() {
-        email = sharedModel.account?.appleID ?? ""
-        teamId = sharedModel.team?.identifier ?? ""
-    }
-    
 }
