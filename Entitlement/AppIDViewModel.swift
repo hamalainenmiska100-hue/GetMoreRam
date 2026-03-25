@@ -4,29 +4,34 @@
 //
 //  Created by s s on 2025/3/15.
 //
+
 import SwiftUI
 import StosSign
 
-class AppIDModel : ObservableObject, Hashable {
+@MainActor
+final class AppIDModel: ObservableObject, Hashable {
     static func == (lhs: AppIDModel, rhs: AppIDModel) -> Bool {
         return lhs === rhs
     }
-    
+
     func hash(into hasher: inout Hasher) {
         hasher.combine(ObjectIdentifier(self))
     }
-    
+
     var appID: AppID
     @Published var bundleID: String
     @Published var result: String = ""
-    
+
     init(appID: AppID) {
         self.appID = appID
-        bundleID = appID.bundleIdentifier
+        self.bundleID = appID.bundleIdentifier
     }
-    
+
     func addIncreasedMemory() async throws {
-        guard let team = DataManager.shared.model.team, let session = DataManager.shared.model.session else {
+        _ = try await LoginViewModel.shared.ensureAuthenticated(interactive: false)
+
+        guard let team = DataManager.shared.model.team,
+              let session = DataManager.shared.model.session else {
             throw "Please Login First"
         }
 
@@ -46,50 +51,56 @@ class AppIDModel : ObservableObject, Hashable {
             "X-Apple-I-MD-RINFO": session.anisetteData.routingInfo.description,
             "X-Mme-Device-Id": session.anisetteData.deviceUniqueIdentifier,
             "X-MMe-Client-Info": session.anisetteData.deviceDescription,
-            "X-Apple-I-Client-Time": dateFormatter.string(from:session.anisetteData.date),
+            "X-Apple-I-Client-Time": dateFormatter.string(from: session.anisetteData.date),
             "X-Apple-Locale": session.anisetteData.locale.identifier,
-            "X-Apple-I-TimeZone": session.anisetteData.timeZone.abbreviation()!
-        ] as [String : String];
-        
+            "X-Apple-I-TimeZone": session.anisetteData.timeZone.abbreviation() ?? TimeZone.current.identifier
+        ]
+
         var request = URLRequest(url: URL(string: "https://developerservices2.apple.com/services/v1/bundleIds/\(appID.identifier)")!)
         request.httpMethod = "PATCH"
         request.allHTTPHeaderFields = httpHeaders
-        request.httpBody = "{\"data\":{\"relationships\":{\"bundleIdCapabilities\":{\"data\":[{\"relationships\":{\"capability\":{\"data\":{\"id\":\"INCREASED_MEMORY_LIMIT\",\"type\":\"capabilities\"}}},\"type\":\"bundleIdCapabilities\",\"attributes\":{\"settings\":[],\"enabled\":true}}]}},\"id\":\"\(appID.identifier)\",\"attributes\":{\"hasExclusiveManagedCapabilities\":false,\"teamId\":\"\(team.identifier)\",\"bundleType\":\"bundle\",\"identifier\":\"\(appID.bundleIdentifier)\",\"seedId\":\"\(team.identifier)\",\"name\":\"\(appID.name)\"},\"type\":\"bundleIds\"}}".data(using: .utf8)
-        
+        request.httpBody = """
+        {"data":{"relationships":{"bundleIdCapabilities":{"data":[{"relationships":{"capability":{"data":{"id":"INCREASED_MEMORY_LIMIT","type":"capabilities"}}},"type":"bundleIdCapabilities","attributes":{"settings":[],"enabled":true}}]}},"id":"\(appID.identifier)","attributes":{"hasExclusiveManagedCapabilities":false,"teamId":"\(team.identifier)","bundleType":"bundle","identifier":"\(appID.bundleIdentifier)","seedId":"\(team.identifier)","name":"\(appID.name)"},"type":"bundleIds"}}
+        """.data(using: .utf8)
+
         let (data, _) = try await URLSession.shared.data(for: request)
-        
-        await MainActor.run {
-            result = String(data: data, encoding: .utf8) ?? "Unable to decode response."
-        }
-        
+
+        result = String(data: data, encoding: .utf8) ?? "Unable to decode response."
     }
-    
 }
 
-class AppIDViewModel : ObservableObject {
-    @Published var appIDs : [AppIDModel] = []
-    
+@MainActor
+final class AppIDViewModel: ObservableObject {
+    @Published var appIDs: [AppIDModel] = []
+
     func fetchAppIDs() async throws {
-        guard let team = DataManager.shared.model.team, let session = DataManager.shared.model.session else {
+        _ = try await LoginViewModel.shared.ensureAuthenticated(interactive: false)
+
+        guard let team = DataManager.shared.model.team,
+              let session = DataManager.shared.model.session else {
             throw "Please Login First"
         }
-        
-        let ids = try await withUnsafeThrowingContinuation { (c: UnsafeContinuation<[AppID], Error>) in
-            AppleAPI().fetchAppIDsForTeam(team: team, session: session) { (appIDs, error) in
-                if let error = appIDs as? Error {
+
+        let ids = try await withCheckedThrowingContinuation { (c: CheckedContinuation<[AppID], Error>) in
+            AppleAPI().fetchAppIDsForTeam(team: team, session: session) { appIDs, error in
+                if let error {
                     c.resume(throwing: error)
+                    return
                 }
+
                 guard let appIDs else {
                     c.resume(throwing: "AppIDs is nil. Please try again or reopen the app.")
                     return
                 }
+
                 c.resume(returning: appIDs)
             }
         }
-        await MainActor.run {
-            for id in ids {
-                appIDs.append(AppIDModel(appID: id))
-            }
-        }
+
+        let uniqueIDs = Dictionary(grouping: ids, by: \.identifier)
+            .compactMap { $0.value.first }
+            .sorted { $0.bundleIdentifier.localizedCaseInsensitiveCompare($1.bundleIdentifier) == .orderedAscending }
+
+        appIDs = uniqueIDs.map { AppIDModel(appID: $0) }
     }
 }
