@@ -76,7 +76,7 @@ struct SettingsView: View {
             sharedModel.syncAnisetteServerURL()
             refreshAccountSummary()
         }
-        .onChange(of: sharedModel.anisetteServerURL) { _, _ in
+        .onChange(of: sharedModel.anisetteServerURL) { _ in
             sharedModel.syncAnisetteServerURL()
         }
     }
